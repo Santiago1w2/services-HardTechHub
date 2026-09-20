@@ -1,52 +1,30 @@
-  .env
-  .env.*
-  !.env.example
-  !.env.sample
-  .aws/
-  *.pem
-  *.key
-  *.p12
-  *.pfx
-  *.jks
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-  # Python
-  __pycache__/
-  *.py[cod]
-  .venv/
-  venv/
-  env/
-  *.egg-info/
-  .pytest_cache/
-  .mypy_cache/
-  .ruff_cache/
-  .coverage
-  .coverage.*
-  htmlcov/
+# Java / Maven
+target/
+*.class
 
-  # Node.js / TypeScript
-  node_modules/
-  dist/
-  *.tsbuildinfo
-  coverage/
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
 
-  # Java / Maven
-  target/
-  *.class
+# VS Code
+.vscode/
 
-  # Archivos generados
-  build/
-  *.log
-  logs/
-  *.tmp
+# Environment
+.env
+.env.*
+!.env.example
 
-  # Configuración local del editor
-  .idea/
-  .vscode/
-  *.iml
-  *.swp
-  *.swo
+# Logs
+*.log
 
-  # Sistema operativo
-  .DS_Store
-  Thumbs.db
-  desktop.ini
+# OS
+.DS_Store
+Thumbs.db
