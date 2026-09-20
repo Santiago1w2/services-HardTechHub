@@ -1,0 +1,52 @@
+  .env
+  .env.*
+  !.env.example
+  !.env.sample
+  .aws/
+  *.pem
+  *.key
+  *.p12
+  *.pfx
+  *.jks
+
+  # Python
+  __pycache__/
+  *.py[cod]
+  .venv/
+  venv/
+  env/
+  *.egg-info/
+  .pytest_cache/
+  .mypy_cache/
+  .ruff_cache/
+  .coverage
+  .coverage.*
+  htmlcov/
+
+  # Node.js / TypeScript
+  node_modules/
+  dist/
+  *.tsbuildinfo
+  coverage/
+
+  # Java / Maven
+  target/
+  *.class
+
+  # Archivos generados
+  build/
+  *.log
+  logs/
+  *.tmp
+
+  # Configuración local del editor
+  .idea/
+  .vscode/
+  *.iml
+  *.swp
+  *.swo
+
+  # Sistema operativo
+  .DS_Store
+  Thumbs.db
+  desktop.ini
