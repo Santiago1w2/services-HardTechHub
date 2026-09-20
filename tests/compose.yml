@@ -1,0 +1,93 @@
+services:
+  mongodb:
+    image: mongo:8
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: hardtech
+      MONGO_INITDB_ROOT_PASSWORD: hardtech
+    tmpfs: [/data/db, /data/configdb]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: hardtech
+      POSTGRES_PASSWORD: hardtech
+      POSTGRES_DB: hardtech_catalog
+    tmpfs: [/var/lib/postgresql/data]
+    volumes:
+      - ./fixtures/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hardtech -d hardtech_catalog"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      MYSQL_ROOT_PASSWORD: root
+    tmpfs: [/var/lib/mysql]
+    volumes:
+      - ./fixtures/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  identity-service:
+    image: hardtech-review-identity
+    build: ../identity-service
+    environment: &identity-env
+      JWT_SECRET: test-only-secret-not-for-production-12345678
+      MONGO_URI: mongodb://hardtech:hardtech@mongodb:27017/?authSource=admin
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+  catalog-service:
+    image: hardtech-review-catalog
+    build: ../catalog-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+  order-service:
+    build: ../order-service
+    depends_on:
+      mysql:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+  compatibility-service:
+    image: hardtech-review-compatibility
+    build: ../compatibility-service
+    depends_on:
+      - catalog-service
+  analytics-service:
+    build: ../analytics-service
+    depends_on:
+      identity-service:
+        condition: service_healthy
+  runner:
+    build:
+      context: .
+    environment:
+      <<: *identity-env
+      AWS_EC2_METADATA_DISABLED: "true"
+    volumes:
+      - ..:/workspace:ro
+    depends_on:
+      - order-service
+      - catalog-service
+      - compatibility-service
+      - analytics-service

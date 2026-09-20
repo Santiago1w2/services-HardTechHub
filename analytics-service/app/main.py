@@ -5,17 +5,14 @@ from typing import Any
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from .auth import require_admin
 
 
 def get_s3_client() -> Any:
-    return boto3.client(
-        "s3",
-        endpoint_url=os.getenv("S3_ENDPOINT_URL", "http://localstack:4566"),
-        region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
-    )
+    # AWS credentials come from the standard SDK chain (e.g. an EC2 IAM role).
+    return boto3.client("s3", endpoint_url=os.getenv("S3_ENDPOINT_URL") or None)
+
 
 
 def get_bucket_name() -> str:
@@ -29,11 +26,14 @@ def get_events_prefix() -> str:
 def list_event_objects() -> list[str]:
     s3_client = get_s3_client()
     try:
-        response = s3_client.list_objects_v2(Bucket=get_bucket_name(), Prefix=get_events_prefix())
-    except (ClientError, BotoCoreError) as exc:
-        raise HTTPException(status_code=500, detail="S3 error") from exc
+        pages = s3_client.get_paginator("list_objects_v2").paginate(
+            Bucket=get_bucket_name(), Prefix=get_events_prefix(),
+        )
+        return [obj["Key"] for page in pages for obj in page.get("Contents", [])
+                if obj["Key"].endswith(".json")]
+    except (ClientError, BotoCoreError):
+        raise HTTPException(status_code=503, detail="S3 unavailable") from None
 
-    return [obj["Key"] for obj in response.get("Contents", []) if obj["Key"].endswith(".json")]
 
 
 def load_events() -> list[dict[str, Any]]:
@@ -45,15 +45,22 @@ def load_events() -> list[dict[str, Any]]:
         except (ClientError, BotoCoreError) as exc:
             raise HTTPException(status_code=500, detail="S3 error") from exc
 
-        payload = response["Body"].read().decode("utf-8").strip()
-        if not payload:
-            continue
-
-        parsed = json.loads(payload)
-        if isinstance(parsed, list):
-            events.extend(parsed)
-        else:
-            events.append(parsed)
+        try:
+            payload = response["Body"].read().decode("utf-8").strip()
+            if not payload:
+                continue
+            parsed = json.loads(payload)
+            batch = parsed if isinstance(parsed, list) else [parsed]
+            if any(not isinstance(event, dict) or
+                   not isinstance(event.get("event_type", "UNKNOWN"), str) for event in batch):
+                raise ValueError("Invalid event")
+            events.extend(batch)
+        except (ValueError, UnicodeError):
+            raise HTTPException(status_code=502, detail="Invalid event data in S3") from None
+        except (BotoCoreError, OSError):
+            raise HTTPException(status_code=503, detail="S3 unavailable") from None
+        finally:
+            response["Body"].close()
 
     return events
 
@@ -67,7 +74,7 @@ def healthcheck() -> dict[str, str]:
 
 
 @app.get("/api/analytics/events/count")
-def count_events() -> dict[str, Any]:
+def count_events(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     events = load_events()
     event_types = Counter(event.get("event_type", "UNKNOWN") for event in events)
     return {
@@ -78,7 +85,7 @@ def count_events() -> dict[str, Any]:
 
 
 @app.get("/api/analytics/top-products")
-def top_products() -> dict[str, Any]:
+def top_products(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     events = load_events()
     product_views = Counter(
         str(event["product_id"])

@@ -1,0 +1,77 @@
+services:
+  identity-service:
+    build:
+      context: ./identity-service
+    environment:
+      MONGO_URI: ${MONGO_URI:-mongodb://hardtech:hardtech@mongodb:27017/?authSource=admin}
+      MONGO_DB: ${MONGO_DB:-hardtech_identity}
+      MONGO_USERS_COLLECTION: ${MONGO_USERS_COLLECTION:-users}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a random secret of at least 32 bytes}
+      JWT_EXP_MINUTES: ${JWT_EXP_MINUTES:-60}
+    ports:
+      - "8001:8001"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+
+  catalog-service:
+    build: ./catalog-service
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-hardtech_catalog}
+      POSTGRES_USER: ${POSTGRES_USER:-hardtech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hardtech}
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:-http://identity-service:8001}
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+  order-service:
+    build: ./order-service
+    environment:
+      MYSQL_HOST: ${MYSQL_HOST:-mysql}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-hardtech_orders}
+      MYSQL_USER: ${MYSQL_USER:-hardtech}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-hardtech}
+      CATALOG_SERVICE_URL: ${CATALOG_SERVICE_URL:-http://catalog-service:8002}
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:-http://identity-service:8001}
+    ports:
+      - "8003:8003"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      identity-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_started
+
+  compatibility-service:
+    build: ./compatibility-service
+    environment:
+      CATALOG_SERVICE_URL: ${CATALOG_SERVICE_URL:-http://catalog-service:8002}
+    ports:
+      - "8004:8004"
+    depends_on:
+      catalog-service:
+        condition: service_started
+  analytics-service:
+    build: ./analytics-service
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: ${S3_EVENTS_PREFIX:-raw/events/}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:-http://identity-service:8001}
+    ports:
+      - "8005:8005"
+    depends_on:
+      identity-service:
+        condition: service_healthy
+

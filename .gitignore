@@ -28,3 +28,9 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+# Python and local secrets
+__pycache__/
+.pytest_cache/
+.env
+.env.*
+!.env.example

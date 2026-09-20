@@ -1,0 +1,76 @@
+name: Microservices CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Build and regression tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      COMPOSE_FILE: tests/compose.yml
+      COMPOSE_PROJECT_NAME: hardtech-ci
+      COMPOSE_ANSI: never
+      BUILDKIT_PROGRESS: plain
+
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate Compose
+        run: docker compose config --quiet
+
+      - name: Build microservices
+        run: |
+          docker compose build identity-service catalog-service order-service compatibility-service analytics-service
+
+      # The test Dockerfile extends the Identity image built in the previous step.
+      - name: Build test runner
+        run: docker compose build runner
+
+      - name: Start isolated test environment
+        run: >-
+          docker compose up -d --no-build --wait --wait-timeout 180
+          mongodb postgres mysql identity-service catalog-service
+          order-service compatibility-service analytics-service
+
+      - name: Run regression tests
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-logs"
+          docker compose run --rm --no-deps -T runner 2>&1 | tee "$RUNNER_TEMP/test-logs/tests.log"
+
+      - name: Collect service logs
+        if: always() && steps.checkout.outcome == 'success'
+        run: |
+          mkdir -p "$RUNNER_TEMP/test-logs"
+          docker compose ps -a > "$RUNNER_TEMP/test-logs/containers.txt"
+          docker compose logs --no-color > "$RUNNER_TEMP/test-logs/services.log" 2>&1
+
+      - name: Upload test logs
+        if: always() && steps.checkout.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: microservices-test-logs
+          path: ${{ runner.temp }}/test-logs/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Clean up test environment
+        if: always() && steps.checkout.outcome == 'success'
+        run: docker compose down --volumes --remove-orphans

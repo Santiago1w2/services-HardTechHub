@@ -5,10 +5,11 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 import json
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import pymysql
+from .auth import get_current_user, require_admin, require_owner_or_admin
 
 
 def get_connection() -> pymysql.connections.Connection:
@@ -54,13 +55,13 @@ def fetch_product_snapshot(product_id: int) -> dict[str, Any]:
         if exc.code == 404:
             raise HTTPException(status_code=400, detail=f"Product {product_id} not found in catalog") from exc
         raise HTTPException(status_code=502, detail="Catalog Service error") from exc
-    except URLError as exc:
+    except (URLError, TimeoutError, OSError) as exc:
         raise HTTPException(status_code=503, detail="Catalog Service unavailable") from exc
 
 
 class OrderItemRequest(BaseModel):
-    product_id: int
-    quantity: int
+    product_id: int = Field(gt=0)
+    quantity: int = Field(gt=0)
 
 
 class CreateOrderRequest(BaseModel):
@@ -81,7 +82,7 @@ def healthcheck() -> dict[str, str]:
 
 
 @app.get("/api/orders", tags=["Orders"])
-def get_all_orders() -> list[dict[str, Any]]:
+def get_all_orders(user: dict[str, Any] = Depends(require_admin)) -> list[dict[str, Any]]:
     """Listado general de órdenes para el Frontend"""
     conn = get_connection()
     try:
@@ -101,7 +102,9 @@ def get_all_orders() -> list[dict[str, Any]]:
 
 
 @app.post("/api/orders", status_code=201, tags=["Orders"])
-def create_order(payload: CreateOrderRequest) -> dict[str, Any]:
+def create_order(payload: CreateOrderRequest, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    if payload.user_id != user["user_id"]:
+        raise HTTPException(status_code=403, detail="Cannot create orders for another user")
     if not payload.items:
         raise HTTPException(status_code=400, detail="Order items are required")
 
@@ -109,6 +112,8 @@ def create_order(payload: CreateOrderRequest) -> dict[str, Any]:
     subtotal = Decimal("0.00")
     for item in payload.items:
         product = fetch_product_snapshot(item.product_id)
+        if product.get("is_active") is not True:
+            raise HTTPException(status_code=400, detail="Product is inactive")
         unit_price = Decimal(str(product["price"]))
         item_subtotal = unit_price * item.quantity
         order_snapshots.append(
@@ -135,7 +140,7 @@ def create_order(payload: CreateOrderRequest) -> dict[str, Any]:
                 INSERT INTO orders (user_id, status, subtotal, tax, shipping_cost, total_amount)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (payload.user_id, "PENDING", str(subtotal), str(tax), str(shipping_cost), str(total_amount)),
+                (user["user_id"], "PENDING", str(subtotal), str(tax), str(shipping_cost), str(total_amount)),
             )
             order_id = cursor.lastrowid
 
@@ -160,7 +165,7 @@ def create_order(payload: CreateOrderRequest) -> dict[str, Any]:
         conn.commit()
     except Exception as exc:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=f"MySQL error: {str(exc)}") from exc
+        raise HTTPException(status_code=500, detail="MySQL error") from exc
     finally:
         conn.close()
 
@@ -168,7 +173,8 @@ def create_order(payload: CreateOrderRequest) -> dict[str, Any]:
 
 
 @app.get("/api/orders/user/{user_id}", tags=["Orders"])
-def get_orders_by_user(user_id: str) -> Any:
+def get_orders_by_user(user_id: str, user: dict[str, Any] = Depends(get_current_user)) -> Any:
+    require_owner_or_admin(user, user_id)
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -190,7 +196,7 @@ def get_orders_by_user(user_id: str) -> Any:
 
 
 @app.get("/api/orders/{order_id}", tags=["Orders"])
-def get_order(order_id: int) -> dict[str, Any]:
+def get_order(order_id: int, user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     conn = get_connection()
     try:
         with conn.cursor() as cursor:
@@ -198,6 +204,8 @@ def get_order(order_id: int) -> dict[str, Any]:
             order = cursor.fetchone()
             if not order:
                 raise HTTPException(status_code=404, detail="Order not found")
+
+            require_owner_or_admin(user, order["user_id"])
 
             if "subtotal" in order: order["subtotal"] = str(order["subtotal"])
             if "tax" in order: order["tax"] = str(order["tax"])
@@ -218,7 +226,7 @@ def get_order(order_id: int) -> dict[str, Any]:
 
 
 @app.patch("/api/orders/{order_id}/status", tags=["Orders"])
-def update_order_status(order_id: int, payload: UpdateStatusRequest) -> dict[str, Any]:
+def update_order_status(order_id: int, payload: UpdateStatusRequest, user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
     if payload.status not in VALID_STATUSES:
         raise HTTPException(
             status_code=400,
