@@ -44,6 +44,9 @@ services:
     build: ../identity-service
     environment: &identity-env
       JWT_SECRET: test-only-secret-not-for-production-12345678
+      JWT_EXP_MINUTES: "60"
+      MONGO_DB: hardtech_identity
+      MONGO_USERS_COLLECTION: users
       MONGO_URI: mongodb://hardtech:hardtech@mongodb:27017/?authSource=admin
     depends_on:
       mongodb:
@@ -56,6 +59,13 @@ services:
   catalog-service:
     image: hardtech-review-catalog
     build: ../catalog-service
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: hardtech
+      POSTGRES_PASSWORD: hardtech
+      IDENTITY_SERVICE_URL: http://identity-service:8001
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,6 +73,14 @@ services:
         condition: service_healthy
   order-service:
     build: ../order-service
+    environment: &order-env
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      IDENTITY_SERVICE_URL: http://identity-service:8001
     depends_on:
       mysql:
         condition: service_healthy
@@ -71,10 +89,19 @@ services:
   compatibility-service:
     image: hardtech-review-compatibility
     build: ../compatibility-service
+    environment:
+      SERVER_PORT: "8004"
+      CATALOG_SERVICE_URL: http://catalog-service:8002
     depends_on:
       - catalog-service
   analytics-service:
     build: ../analytics-service
+    environment: &analytics-env
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_EC2_METADATA_DISABLED: "true"
+      IDENTITY_SERVICE_URL: http://identity-service:8001
     depends_on:
       identity-service:
         condition: service_healthy
@@ -82,8 +109,7 @@ services:
     build:
       context: .
     environment:
-      <<: *identity-env
-      AWS_EC2_METADATA_DISABLED: "true"
+      <<: [*identity-env, *order-env, *analytics-env]
     volumes:
       - ..:/workspace:ro
     depends_on:
