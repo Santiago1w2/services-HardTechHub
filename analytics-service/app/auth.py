@@ -13,7 +13,7 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail="Invalid Authorization header")
-    url = os.getenv("IDENTITY_SERVICE_URL", "http://identity-service:8001").rstrip("/")
+    url = os.getenv("IDENTITY_SERVICE_URL").rstrip("/")
     request = Request(f"{url}/api/auth/me", headers={"Authorization": authorization})
     try:
         with urlopen(request, timeout=5) as response:

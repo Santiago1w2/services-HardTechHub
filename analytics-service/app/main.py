@@ -16,11 +16,11 @@ def get_s3_client() -> Any:
 
 
 def get_bucket_name() -> str:
-    return os.getenv("S3_BUCKET", "hardtech-datalake")
+    return os.getenv("S3_BUCKET")
 
 
 def get_events_prefix() -> str:
-    return os.getenv("S3_EVENTS_PREFIX", "raw/events/")
+    return os.getenv("S3_EVENTS_PREFIX")
 
 
 def list_event_objects() -> list[str]:

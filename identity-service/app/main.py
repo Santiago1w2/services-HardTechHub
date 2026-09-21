@@ -92,14 +92,14 @@ class LoginRequest(BaseModel):
 
 
 def get_jwt_secret() -> str:
-    secret = os.getenv("JWT_SECRET", "")
+    secret = os.getenv("JWT_SECRET")
     if len(secret.encode("utf-8")) < 32:
         raise RuntimeError("JWT_SECRET must contain at least 32 bytes")
     return secret
 
 
 def get_jwt_expiration_minutes() -> int:
-    minutes = int(os.getenv("JWT_EXP_MINUTES", "60"))
+    minutes = int(os.getenv("JWT_EXP_MINUTES"))
     if minutes <= 0:
         raise RuntimeError("JWT_EXP_MINUTES must be positive")
     return minutes

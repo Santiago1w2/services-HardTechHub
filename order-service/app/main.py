@@ -43,7 +43,7 @@ app.add_middleware(
 
 def get_catalog_service_url() -> str:
     # Puerto 8002 que usa catalog-service
-    return os.getenv("CATALOG_SERVICE_URL", "http://catalog-service:8002")
+    return os.getenv("CATALOG_SERVICE_URL")
 
 
 def fetch_product_snapshot(product_id: int) -> dict[str, Any]:

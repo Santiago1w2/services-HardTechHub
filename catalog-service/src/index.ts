@@ -5,13 +5,13 @@ import swaggerUi from "@fastify/swagger-ui";
 import { Pool } from "pg";
 
 const pool = new Pool({
-  host: process.env.POSTGRES_HOST || process.env.DB_HOST || "postgres",
-  port: parseInt(process.env.POSTGRES_PORT || process.env.DB_PORT || "5432"),
+  host: process.env.POSTGRES_HOST,
+  port: parseInt(process.env.POSTGRES_PORT ),
   database:
-    process.env.POSTGRES_DB || process.env.DB_NAME || "hardtech_catalog",
-  user: process.env.POSTGRES_USER || process.env.DB_USER || "hardtech",
+    process.env.POSTGRES_DB ",
+  user: process.env.POSTGRES_USER,
   password:
-    process.env.POSTGRES_PASSWORD || process.env.DB_PASSWORD || "hardtech",
+    process.env.POSTGRES_PASSWORD,
 });
 
 const app = Fastify({ logger: { redact: ["req.headers.authorization"] } });
@@ -24,7 +24,7 @@ app.addHook("preHandler", async (req, reply) => {
     return reply.status(401).send({ detail: "Missing or invalid Bearer token" });
   }
   try {
-    const identityUrl = (process.env.IDENTITY_SERVICE_URL || "http://identity-service:8001").replace(/\/$/, "");
+    const identityUrl = (process.env.IDENTITY_SERVICE_URL).replace(/\/$/, "");
     const response = await fetch(identityUrl + "/api/auth/me", {
       headers: { Authorization: authorization },
       signal: AbortSignal.timeout(5000),
