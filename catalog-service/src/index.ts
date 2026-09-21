@@ -6,9 +6,9 @@ import { Pool } from "pg";
 
 const pool = new Pool({
   host: process.env.POSTGRES_HOST,
-  port: parseInt(process.env.POSTGRES_PORT ),
+  port: parseInt(process.env.POSTGRES_PORT??"5432"),
   database:
-    process.env.POSTGRES_DB ",
+    process.env.POSTGRES_DB,
   user: process.env.POSTGRES_USER,
   password:
     process.env.POSTGRES_PASSWORD,
@@ -24,7 +24,7 @@ app.addHook("preHandler", async (req, reply) => {
     return reply.status(401).send({ detail: "Missing or invalid Bearer token" });
   }
   try {
-    const identityUrl = (process.env.IDENTITY_SERVICE_URL).replace(/\/$/, "");
+    const identityUrl = (process.env.IDENTITY_SERVICE_URL || "http://identity-service:8001").replace(/\/$/, "");
     const response = await fetch(identityUrl + "/api/auth/me", {
       headers: { Authorization: authorization },
       signal: AbortSignal.timeout(5000),

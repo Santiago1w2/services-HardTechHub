@@ -14,11 +14,11 @@ from .auth import get_current_user, require_admin, require_owner_or_admin
 
 def get_connection() -> pymysql.connections.Connection:
     return pymysql.connect(
-        host=os.getenv("MYSQL_HOST", "mysql"),
-        port=int(os.getenv("MYSQL_PORT", "3306")),
-        user=os.getenv("MYSQL_USER", "hardtech"),
-        password=os.getenv("MYSQL_PASSWORD", "hardtech"),
-        database=os.getenv("MYSQL_DATABASE", "hardtech_orders"),
+        host=os.getenv("MYSQL_HOST"),
+        port=int(os.getenv("MYSQL_PORT")),
+        user=os.getenv("MYSQL_USER"),
+        password=os.getenv("MYSQL_PASSWORD"),
+        database=os.getenv("MYSQL_DATABASE"),
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=False,
     )
