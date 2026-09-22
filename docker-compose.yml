@@ -10,9 +10,6 @@ services:
       JWT_EXP_MINUTES: ${JWT_EXP_MINUTES}
     ports:
       - "${IDENTITY_SERVICE_PORT}:8001"
-    depends_on:
-      mongodb:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
       interval: 10s
@@ -31,10 +28,9 @@ services:
     ports:
       - "${CATALOG_SERVICE_PORT}:8002"
     depends_on:
-      postgres:
-        condition: service_healthy
       identity-service:
         condition: service_healthy
+
   order-service:
     build: ./order-service
     environment:
@@ -48,8 +44,6 @@ services:
     ports:
       - "${ORDER_SERVICE_PORT}:8003"
     depends_on:
-      mysql:
-        condition: service_healthy
       identity-service:
         condition: service_healthy
       catalog-service:
@@ -65,6 +59,7 @@ services:
     depends_on:
       catalog-service:
         condition: service_started
+
   analytics-service:
     build: ./analytics-service
     environment:
