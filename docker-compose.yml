@@ -4,16 +4,19 @@ services:
     build: "./catalog-service"
     environment:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
-      CATALOG_MONGO_URI: "${CATALOG_MONGO_URI:-mongodb://catalog_app:local-catalog@mongodb:27017/hardtech_catalog}"
-      CATALOG_MONGO_DB: "hardtech_catalog"
+      POSTGRES_HOST: "${POSTGRES_HOST:-${DATABASE_HOST:?Configurar DATABASE_HOST}}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: "hardtech_catalog"
+      POSTGRES_USER: "catalog_app"
+      POSTGRES_PASSWORD: "${CATALOG_POSTGRES_PASSWORD:?Configurar CATALOG_POSTGRES_PASSWORD}"
     ports:
       - "${CATALOG_SERVICE_PORT:-8002}:8002"
     healthcheck:
       test:
         - "CMD"
-        - "node"
-        - "-e"
-        - "fetch('http://127.0.0.1:8002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=5)"
       interval: "5s"
       timeout: "6s"
       retries: 30
@@ -22,11 +25,8 @@ services:
     build: "./inventory-service"
     environment:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
-      INVENTORY_POSTGRES_HOST: "${INVENTORY_POSTGRES_HOST:-postgres}"
-      INVENTORY_POSTGRES_PORT: "5432"
-      INVENTORY_POSTGRES_DB: "hardtech_inventory"
-      INVENTORY_POSTGRES_USER: "inventory_app"
-      INVENTORY_POSTGRES_PASSWORD: "${INVENTORY_POSTGRES_PASSWORD:-local-inventory}"
+      INVENTORY_MONGO_URI: "${INVENTORY_MONGO_URI:?Configurar INVENTORY_MONGO_URI con IP privada de Database}"
+      INVENTORY_MONGO_DB: "hardtech_inventory"
     ports:
       - "${INVENTORY_SERVICE_PORT:-8006}:8006"
     healthcheck:
@@ -43,11 +43,11 @@ services:
     build: "./order-service"
     environment:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
-      MYSQL_HOST: "${MYSQL_HOST:-mysql}"
-      MYSQL_PORT: "3306"
+      MYSQL_HOST: "${MYSQL_HOST:-${DATABASE_HOST:?Configurar DATABASE_HOST}}"
+      MYSQL_PORT: "${MYSQL_PORT:-3306}"
       MYSQL_DATABASE: "hardtech_orders"
       MYSQL_USER: "orders_app"
-      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-local-orders}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?Configurar MYSQL_PASSWORD}"
       CATALOG_SERVICE_URL: "${CATALOG_SERVICE_URL:-http://catalog-service:8002}"
       INVENTORY_SERVICE_URL: "${INVENTORY_SERVICE_URL:-http://inventory-service:8006}"
     ports:
@@ -73,11 +73,6 @@ services:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
       SERVER_PORT: "8004"
       CATALOG_SERVICE_URL: "${CATALOG_SERVICE_URL:-http://catalog-service:8002}"
-      COMPATIBILITY_POSTGRES_HOST: "${COMPATIBILITY_POSTGRES_HOST:-postgres}"
-      COMPATIBILITY_POSTGRES_PORT: "5432"
-      COMPATIBILITY_POSTGRES_DB: "hardtech_compatibility"
-      COMPATIBILITY_POSTGRES_USER: "compatibility_app"
-      COMPATIBILITY_POSTGRES_PASSWORD: "${COMPATIBILITY_POSTGRES_PASSWORD:-local-compatibility}"
     ports:
       - "${COMPATIBILITY_SERVICE_PORT:-8004}:8004"
     depends_on:

@@ -9,7 +9,6 @@ from uuid import uuid4
 import psycopg2
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pymongo import MongoClient
 from botocore.exceptions import ClientError
 import test_services
 from test_services import api, orders, analytics, athena, pipeline
@@ -174,13 +173,20 @@ class BusinessTests(unittest.TestCase):
         api("catalog-service",8002,f"/api/products/{pid}","DELETE")
         self.assertEqual(api("order-service",8003,"/api/orders","POST",{"items":[{"product_id":pid,"quantity":1}]}).status_code,400)
 
-    def test_mongo_persistence_and_indexes(self):
+    def test_catalog_persistence_and_indexes(self):
         pid=self.product({"socket":"AM5"})
-        with MongoClient(os.environ["CATALOG_MONGO_URI"]) as client:
-            collection=client.hardtech_catalog.products
-            product=collection.find_one({"_id":pid})
-            self.assertEqual(product["specifications"]["socket"],"AM5")
-            self.assertTrue(collection.index_information()["sku_1"]["unique"])
+        conn=psycopg2.connect(host="postgres",dbname="hardtech_catalog",user="catalog_app",
+            password=os.environ["CATALOG_POSTGRES_PASSWORD"])
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT specs FROM products WHERE id=%s",(pid,))
+                specs=cursor.fetchone()[0]
+                self.assertEqual(specs["socket"],"AM5")
+                cursor.execute("SELECT indexname FROM pg_indexes WHERE tablename='products'")
+                indexes=[row[0] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+        self.assertTrue(any(name.endswith("_sku_key") for name in indexes))
         result=api("catalog-service",8002,f"/api/products/{pid}","PUT",{"specifications":{"cores":8}})
         self.assertEqual(result.status_code,200,result.text)
         detail=api("catalog-service",8002,f"/api/products/{pid}").json()
@@ -188,12 +194,21 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(detail["specs"],detail["specifications"])
 
     def test_postgres_database_separation(self):
-        with self.assertRaises(psycopg2.OperationalError):
-            psycopg2.connect(host="postgres",dbname="hardtech_compatibility",user="inventory_app",
-                             password=os.environ["INVENTORY_POSTGRES_PASSWORD"],connect_timeout=5)
-        with self.assertRaises(psycopg2.OperationalError):
-            psycopg2.connect(host="postgres",dbname="hardtech_inventory",user="compatibility_app",
-                             password=os.environ["COMPATIBILITY_POSTGRES_PASSWORD"],connect_timeout=5)
+        conn=psycopg2.connect(host="postgres",dbname="hardtech_catalog",user="catalog_app",
+            password=os.environ["CATALOG_POSTGRES_PASSWORD"],connect_timeout=5)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname")
+                databases=[row[0] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+        self.assertIn("hardtech_catalog",databases)
+        self.assertNotIn("hardtech_inventory",databases)
+        self.assertNotIn("hardtech_compatibility",databases)
+        for db in ("hardtech_inventory","hardtech_compatibility"):
+            with self.assertRaises(psycopg2.OperationalError):
+                psycopg2.connect(host="postgres",dbname=db,user="catalog_app",
+                    password=os.environ["CATALOG_POSTGRES_PASSWORD"],connect_timeout=5)
 
     def test_analytics_export_real_apis_without_duplicate_files(self):
         pid=self.product(stock=5)
@@ -248,19 +263,15 @@ class BusinessTests(unittest.TestCase):
         self.assertIsNone(rows[0]["order_id"])
         self.assertEqual(rows[-1]["order_id"],body["order_id"])
 
-    def test_compatibility_result_persisted(self):
-        a,b=self.product({"socket":"AM5"}),self.product({"socket":"AM5"})
-        result=api("compatibility-service",8004,"/api/compatibility/check","POST",
-            {"components":[{"type":"cpu","product_id":a},{"type":"motherboard","product_id":b}]})
-        self.assertEqual(result.status_code,200,result.text)
-        conn=psycopg2.connect(host="postgres",dbname="hardtech_compatibility",user="compatibility_app",
-            password=os.environ["COMPATIBILITY_POSTGRES_PASSWORD"])
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT c.compatible FROM compatibility_checks c JOIN compatibility_components p ON p.check_id=c.id WHERE p.product_id=%s",(a,))
-                self.assertEqual(cursor.fetchone(),(True,))
-        finally:
-            conn.close()
+def test_compatibility_stateless(self):
+        a, b = self.product({"socket": "AM5"}), self.product({"socket": "AM5"})
+        result = api("compatibility-service", 8004, "/api/compatibility/check", "POST",
+            {"components": [{"type": "cpu", "product_id": a}, {"type": "motherboard", "product_id": b}]})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertTrue(result.json()["compatible"])
+        with self.assertRaises(psycopg2.OperationalError):
+            psycopg2.connect(host="postgres", dbname="hardtech_compatibility", user="catalog_app",
+                password=os.environ["CATALOG_POSTGRES_PASSWORD"], connect_timeout=5)
 
 
 class AnalyticsTests(unittest.TestCase):

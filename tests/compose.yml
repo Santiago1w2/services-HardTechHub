@@ -5,8 +5,7 @@ services:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "local-postgres"
       POSTGRES_DB: "postgres"
-      INVENTORY_POSTGRES_PASSWORD: "local-inventory"
-      COMPATIBILITY_POSTGRES_PASSWORD: "local-compatibility"
+      CATALOG_POSTGRES_PASSWORD: "local-catalog"
     volumes:
       - "./fixtures/postgres/init:/docker-entrypoint-initdb.d:ro"
       - "./fixtures/postgres/schemas:/schemas:ro"
@@ -44,7 +43,7 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: "mongo_admin"
       MONGO_INITDB_ROOT_PASSWORD: "local-mongo-root"
-      CATALOG_MONGO_PASSWORD: "local-catalog"
+      INVENTORY_MONGO_PASSWORD: "local-inventory"
     volumes:
       - "./fixtures/mongo/init:/docker-entrypoint-initdb.d:ro"
     healthcheck:
@@ -53,7 +52,7 @@ services:
         - "mongosh"
         - "--quiet"
         - "--eval"
-        - "const c=db.getSiblingDB(\"hardtech_catalog\"); c.auth(\"catalog_app\", process.env.CATALOG_MONGO_PASSWORD); quit(c.counters.findOne({_id:\"products\"}) ? 0 : 1)"
+        - "const i=db.getSiblingDB(\"hardtech_inventory\"); i.auth(\"inventory_app\", process.env.INVENTORY_MONGO_PASSWORD); quit(i.counters.findOne({_id:\"movements\"}) ? 0 : 1)"
       interval: "5s"
       timeout: "6s"
       retries: 30
@@ -64,30 +63,30 @@ services:
     build: "../catalog-service"
     environment:
       CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
-      CATALOG_MONGO_URI: "mongodb://catalog_app:local-catalog@mongodb:27017/hardtech_catalog"
-      CATALOG_MONGO_DB: "hardtech_catalog"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "hardtech_catalog"
+      POSTGRES_USER: "catalog_app"
+      POSTGRES_PASSWORD: "local-catalog"
     healthcheck:
       test:
         - "CMD"
-        - "node"
-        - "-e"
-        - "fetch('http://127.0.0.1:8002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=5)"
       interval: "5s"
       timeout: "6s"
       retries: 30
       start_period: "10s"
     depends_on:
-      mongodb:
+      postgres:
         condition: "service_healthy"
   inventory-service:
     build: "../inventory-service"
     environment:
       CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
-      INVENTORY_POSTGRES_HOST: "postgres"
-      INVENTORY_POSTGRES_PORT: "5432"
-      INVENTORY_POSTGRES_DB: "hardtech_inventory"
-      INVENTORY_POSTGRES_USER: "inventory_app"
-      INVENTORY_POSTGRES_PASSWORD: "local-inventory"
+      INVENTORY_MONGO_URI: "mongodb://inventory_app:local-inventory@mongodb:27017/hardtech_inventory"
+      INVENTORY_MONGO_DB: "hardtech_inventory"
     healthcheck:
       test:
         - "CMD"
@@ -99,7 +98,7 @@ services:
       retries: 30
       start_period: "10s"
     depends_on:
-      postgres:
+      mongodb:
         condition: "service_healthy"
   order-service:
     build: "../order-service"
@@ -135,15 +134,8 @@ services:
       CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
       SERVER_PORT: "8004"
       CATALOG_SERVICE_URL: "http://catalog-service:8002"
-      COMPATIBILITY_POSTGRES_HOST: "postgres"
-      COMPATIBILITY_POSTGRES_PORT: "5432"
-      COMPATIBILITY_POSTGRES_DB: "hardtech_compatibility"
-      COMPATIBILITY_POSTGRES_USER: "compatibility_app"
-      COMPATIBILITY_POSTGRES_PASSWORD: "local-compatibility"
     depends_on:
       catalog-service:
-        condition: "service_healthy"
-      postgres:
         condition: "service_healthy"
     healthcheck:
       test:
@@ -181,11 +173,7 @@ services:
     build:
       context: "."
     environment:
-      INVENTORY_POSTGRES_HOST: "postgres"
-      INVENTORY_POSTGRES_PORT: "5432"
-      INVENTORY_POSTGRES_DB: "hardtech_inventory"
-      INVENTORY_POSTGRES_USER: "inventory_app"
-      INVENTORY_POSTGRES_PASSWORD: "local-inventory"
+      CATALOG_POSTGRES_PASSWORD: "local-catalog"
       MYSQL_HOST: "mysql"
       MYSQL_PORT: "3306"
       MYSQL_DATABASE: "hardtech_orders"
@@ -203,8 +191,6 @@ services:
       ATHENA_QUERY_TIMEOUT_SECONDS: "30"
       ORDER_SERVICE_URL: "http://order-service:8003"
       AWS_EC2_METADATA_DISABLED: "true"
-      CATALOG_MONGO_URI: "mongodb://catalog_app:local-catalog@mongodb:27017/hardtech_catalog"
-      COMPATIBILITY_POSTGRES_PASSWORD: "local-compatibility"
     volumes:
       - "..:/workspace:ro"
     depends_on:

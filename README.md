@@ -2,16 +2,16 @@
 
 ```text
 HardTechHub
-├── catalog-service       → MongoDB / hardtech_catalog
-├── inventory-service     → PostgreSQL / hardtech_inventory
+├── catalog-service       → PostgreSQL / hardtech_catalog
+├── inventory-service     → MongoDB / hardtech_inventory
 ├── order-service         → MySQL / hardtech_orders
-├── compatibility-service → PostgreSQL / hardtech_compatibility
+├── compatibility-service → sin base de datos (stateless, llama a catalog)
 └── analytics-service     → S3 → Glue Data Catalog → Athena
 ```
 
-Se conservan TypeScript/Fastify en catálogo, Python/FastAPI en pedidos y analytics,
-y Java 21/Spring Boot en compatibilidad. Inventario utiliza el patrón Python/FastAPI.
-Las APIs de negocio son públicas. CORS admite únicamente los orígenes configurados.
+Python/FastAPI en catálogo, pedidos, inventario y analytics; Java 21/Spring Boot
+en compatibilidad. Las APIs de negocio son públicas. CORS admite únicamente los
+orígenes configurados.
 
 Cada servicio tiene su propia base y credenciales técnicas. PostgreSQL comparte
 instancia local, pero separa bases, propietarios y permisos CONNECT. Ningún servicio
@@ -42,29 +42,43 @@ docker compose ps
 docker compose logs --tail 100
 ```
 
-En este workspace los repositorios están en `infrastructure` y
-`microservicios/services-HardTechHub`. La red compartida se llama
-`hardtech-business`; infraestructura la crea y servicios la consume como externa.
-No es necesario combinar ambos archivos Compose. Los DNS internos son `mongodb`,
-`postgres`, `mysql` y los nombres de los microservicios.
+## Máquinas separadas: EC2 Database y EC2 de servicios
 
+Cada Compose crea su propia red Docker local. No hay red externa compartida.
+En Database ejecutar el Compose de infraestructura; en PROD ejecutar este Compose.
 
-### Alcance de la red y despliegue EC2
+Antes de arrancar, copiar .env.example a .env sin sobrescribir uno existente y configurar:
+- DATABASE_HOST: IP privada o DNS de Database, sin http://.
+- CATALOG_POSTGRES_PASSWORD, MYSQL_PASSWORD, INVENTORY_MONGO_URI: deben coincidir
+  con las cuentas técnicas creadas en infraestructura (`catalog_app`, `orders_app`,
+  `inventory_app`). Puerto por defecto: PostgreSQL 5432, MySQL 3306, MongoDB 27017.
+- CORS_ORIGINS: origen real del frontend.
 
-El arranque anterior supone que ambos Compose se ejecutan en el mismo host Docker.
-`external: true` significa que infraestructura creó la red; no significa una VPC
-ni una conexión entre servidores. Crear redes con el mismo nombre en distintas
-EC2 no las comunica.
+DATABASE_HOST es el valor común; POSTGRES_HOST y MYSQL_HOST permiten excepciones.
+No usar localhost, postgres, mysql ni mongodb para una base en otra máquina.
+Si se cambian puertos, actualizar ambos lados y los Security Groups; el puerto
+interno del contenedor no cambia.
 
-Para distribuir PROD1/PROD2 y Database en EC2 distintas se requiere una configuración
-de despliegue que use la IP privada o DNS de Database y sus puertos publicados,
-y URLs privadas para APIs ubicadas en otra EC2. Los puertos deben coincidir con
-los Security Groups. Los puertos locales publicados (55432, 3307, 27018 por defecto)
-son distintos de los internos (5432, 3306, 27017); no basta cambiar solo el host.
-Cada EC2 puede conservar su red Docker local. Esta adaptación distribuida está
-pendiente; el Compose actual valida la arquitectura en un único host.
-`docker-compose.aws.yml` monta un perfil AWS para analytics en desarrollo local;
-no configura por sí mismo el despliegue distribuido en EC2.
+La plantilla AWS del workspace permite bases desde SG-PROD y comunicación privada
+entre PROD1/PROD2 en 8002–8006. Aplicar la plantilla actualizada en AWS.
+No es necesario desplegar ambos Compose en cada EC2.
+
+Si todos los microservicios corren juntos, conservar sus URLs por nombre Docker.
+Si se reparten, configurar CATALOG_SERVICE_URL, INVENTORY_SERVICE_URL y
+ORDER_SERVICE_URL con IP privada y puerto de su EC2. Levantar solo los servicios
+asignados con --no-deps, ya que depends_on solo comprueba contenedores locales:
+
+```bash
+# Ejemplo de reparto, no obligatorio:
+# PROD1: catálogo e inventario
+docker compose up -d --build --no-deps --wait catalog-service inventory-service
+# PROD2: configurar las URLs de catálogo/inventario con la IP privada de PROD1
+docker compose up -d --build --no-deps --wait order-service compatibility-service analytics-service
+```
+
+Para todos los servicios en una sola EC2, usar el arranque normal descrito arriba.
+docker-compose.aws.yml únicamente monta un perfil AWS para desarrollo local;
+en EC2 utilizar el rol IAM de ejecución.
 
 Los volúmenes de negocio son nuevos. Los scripts init se ejecutan solamente con
 volúmenes vacíos. Los datos previos no se destruyen ni se importan automáticamente.
@@ -77,13 +91,12 @@ comienzan vacíos: registrar stock antes de comprar.
 Consultar `.env.example`. Los nombres de las bases y las cuentas técnicas están
 definidos coherentemente en Compose e init scripts.
 
-- Catálogo: `CATALOG_MONGO_URI` debe contener la contraseña URL-encoded de
-  `CATALOG_MONGO_PASSWORD` de infraestructura, cuenta `catalog_app`.
-- Inventario: `INVENTORY_POSTGRES_HOST`, `INVENTORY_POSTGRES_PASSWORD`;
-  cuenta `inventory_app`.
-- Compatibilidad: `COMPATIBILITY_POSTGRES_HOST`,
-  `COMPATIBILITY_POSTGRES_PASSWORD`; cuenta `compatibility_app`.
-- Pedidos: `MYSQL_HOST`, `MYSQL_PASSWORD`; cuenta `orders_app`.
+- Catálogo: `POSTGRES_HOST` (o `DATABASE_HOST`), `POSTGRES_PORT`,
+  `CATALOG_POSTGRES_PASSWORD`; cuenta `catalog_app`, base `hardtech_catalog`.
+- Pedidos: `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_PASSWORD`; cuenta `orders_app`,
+  base `hardtech_orders`.
+- Inventario: `INVENTORY_MONGO_URI` (cuenta `inventory_app`, base `hardtech_inventory`).
+- Compatibilidad: no usa base; solo `SERVER_PORT` y `CATALOG_SERVICE_URL`.
 - Comunicación: `CATALOG_SERVICE_URL`, `INVENTORY_SERVICE_URL`,
   `ORDER_SERVICE_URL`. Dentro de Docker no apuntan a localhost.
 - Frontend: `CORS_ORIGINS`; puertos publicados `*_SERVICE_PORT`.
@@ -111,13 +124,12 @@ No incluir credenciales AWS en imágenes o archivos versionados.
 - `GET /api/admin/products?page=1&limit=20&status=all&q=Ryzen`:
   paginación, filtros `category_id`, `brand_id`, estados active/inactive/all.
   El segmento admin se conserva como contrato de la pantalla de gestión.
-- `GET /health` comprueba MongoDB; Swagger en `/docs`.
+- `GET /health` comprueba PostgreSQL; Swagger en `/docs`.
 
-MongoDB contiene `products`, `categories`, `brands` y `counters`.
-Se conservan IDs numéricos externos; MongoDB permite usarlos como `_id`.
-`counters` asigna IDs mediante incremento atómico. SKU tiene índice único.
-`specifications` es el documento flexible persistido. `specs` sigue aceptándose
-y devolviéndose como alias para compatibilidad con clientes existentes.
+PostgreSQL conserva `brands`, `categories` y `products` (con `specs JSONB`).
+Las validaciones de entrada devuelven 400 (no 422): el handler convierte los
+errores de Pydantic/FastAPI. SKU tiene índice único. `specifications` es el
+documento flexible persistido; `specs` se acepta y devuelve como alias.
 Precios de entrada numéricos y de salida como texto decimal de dos cifras.
 
 ```json
@@ -145,17 +157,20 @@ Las operaciones de reserva reciben:
 {"order_id": 1, "items": [{"product_id": 1, "quantity": 2}]}
 ```
 
-`available_stock = stock - reserved_stock`. PostgreSQL impide stock negativo
-y reservas superiores al stock. Se bloquean las filas de productos en orden
-estable y se serializan las operaciones de un mismo pedido. Un lote completo
-se confirma o revierte. Cantidades repetidas del mismo producto se suman.
+`available_stock = stock - reserved_stock`. MongoDB mantiene el id numérico de
+producto como `_id`; los movimientos reciben `_id` numérico incremental (contador
+`counters`), lo que habilita la paginación `after_id` de analytics. La reserva usa
+`$inc` atómico con condición `$expr` sobre el stock disponible y revierte los
+cambios aplicados si algún ítem del lote falla. Un lote completo se confirma o revierte.
+Cantidades repetidas del mismo producto se suman.
 
 `inventory_reservations` registra el pedido externo, sus cantidades y estado.
 Repetir la misma operación no duplica movimientos. Cambiar cantidades durante
 un reintento devuelve 409. Liberar antes de reservar registra una cancelación
-que bloquea reservas tardías. SALE reduce stock y reserva; RELEASE solo la reserva.
-`inventory_movements` registra STOCK_IN, RESERVE, RELEASE, SALE y ADJUSTMENT.
-Los IDs de producto y pedido son referencias externas sin FK a otro servicio.
+que bloquea reservas tardías. CONFIRM reduce stock y reserva; RELEASE solo la reserva.
+`inventory_movements` registra STOCK_IN, RESERVE, RELEASE, SALE y ADJUSTMENT con
+`order_id` opcional. Los IDs de producto y pedido son referencias externas sin FK
+a otro servicio. Los errores de validación conservan el 422 estándar de FastAPI.
 
 ## Pedidos (8003)
 
@@ -189,9 +204,9 @@ reintentar o cancelar; no hay un worker automático de reconciliación.
 ## Compatibilidad (8004)
 
 `POST /api/compatibility/check` conserva las reglas CPU/socket, RAM/memoria y
-GPU/fuente de poder. Consulta productos por HTTP. Cada resultado válido se
-guarda transaccionalmente en `compatibility_checks`, `compatibility_components`
-y `compatibility_messages`. `GET /health` comprueba su propia base.
+GPU/fuente de poder. Consulta productos por HTTP al catálogo. No tiene base de
+datos propia ni historial persistido: cada `check` es stateless. `GET /health`
+verifica solo que el proceso responde.
 
 ```json
 {"components":[{"type":"cpu","product_id":1},{"type":"motherboard","product_id":2}]}
@@ -245,7 +260,8 @@ docker compose -p hardtech-business-test -f tests/compose.yml down --volumes --r
 
 Solo este entorno de pruebas usa bases temporales tmpfs. Sus fixtures son copias
 de los scripts de infraestructura. No usa secretos de AWS; S3/Athena se simulan.
-La suite cubre persistencia MongoDB, inventario concurrente, restricciones,
-reservas idempotentes, recuperación de pedidos y aislamiento PostgreSQL.
-La construcción de compatibilidad ejecuta también Maven/JUnit.
-GitHub Actions ejecuta estos mismos pasos y conserva logs si hay errores.
+La suite cubre persistencia PostgreSQL/MongoDB, inventario concurrente,
+restricciones, reservas idempotentes, recuperación de pedidos y motor
+de compatibilidad stateless. La construcción de compatibilidad ejecuta
+también Maven/JUnit. GitHub Actions ejecuta estos mismos pasos y conserva
+logs si hay errores.
