@@ -19,8 +19,8 @@ services:
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=5)"
       interval: "5s"
       timeout: "6s"
-      retries: 30
-      start_period: "10s"
+      retries: 120
+      start_period: "30s"
   inventory-service:
     build: "./inventory-service"
     environment:
@@ -37,8 +37,8 @@ services:
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8006/health', timeout=5)"
       interval: "5s"
       timeout: "6s"
-      retries: 30
-      start_period: "10s"
+      retries: 120
+      start_period: "30s"
   order-service:
     build: "./order-service"
     environment:
@@ -65,8 +65,8 @@ services:
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=5)"
       interval: "5s"
       timeout: "6s"
-      retries: 30
-      start_period: "10s"
+      retries: 120
+      start_period: "30s"
   compatibility-service:
     build: "./compatibility-service"
     environment:
@@ -84,8 +84,8 @@ services:
         - "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8004; printf \"GET /health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; IFS= read -r status <&3; [[ \"$$status\" == *\" 200 \"* ]]'"
       interval: "5s"
       timeout: "6s"
-      retries: 30
-      start_period: "20s"
+      retries: 120
+      start_period: "30s"
   analytics-service:
     build: "./analytics-service"
     environment:
@@ -110,5 +110,5 @@ services:
         - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=5)"
       interval: "5s"
       timeout: "6s"
-      retries: 30
-      start_period: "10s"
+      retries: 120
+      start_period: "30s"
