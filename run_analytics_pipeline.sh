@@ -5,14 +5,67 @@ REGION="us-east-1"
 CRAWLER_NAME="hardtech-db-extracts-crawler"
 ATHENA_WORKGROUP="hardtech-analytics"
 ATHENA_DB="hardtech_analytics"
-API_URL="https://otkv0558fh.execute-api.us-east-1.amazonaws.com"
 
 echo "=========================================================="
-echo "🚀 INICIANDO PIPELINE ANALÍTICO (GLUE + ATHENA + REFRESH)"
+echo "🚀 INICIANDO PIPELINE ANALÍTICO (INGESTA + GLUE + ATHENA)"
 echo "=========================================================="
 
-# 1. Validaciones previas de infraestructura (Correcciones 4 y 6)
-echo "=== 1. VALIDANDO ENTORNO ANALÍTICO ==="
+# ----------------------------------------------------
+# 1. Detección Dinámica de Recursos S3 y API Gateway
+# ----------------------------------------------------
+echo "=== 1. DETECTANDO RECURSOS EN AWS ==="
+
+# Resolver Bucket S3 dinámicamente
+BUCKET_NAME=$(aws s3api list-buckets \
+  --query "Buckets[?starts_with(Name, 'hardtechhub-bucket')].Name | [0]" \
+  --output text \
+  --region "$REGION")
+
+if [ "$BUCKET_NAME" = "None" ] || [ -z "$BUCKET_NAME" ]; then
+    echo "❌ Error: No se encontró ningún bucket con el prefijo 'hardtechhub-bucket'."
+    exit 1
+fi
+echo "-> Bucket S3 detectado: $BUCKET_NAME"
+
+# Resolver API Gateway URL dinámicamente
+if [ -z "$API_URL" ]; then
+    API_ID=$(aws apigatewayv2 get-apis --region "$REGION" \
+      --query "Items[?Name=='HardTechHub-Gateway'].ApiId | [0]" \
+      --output text 2>/dev/null || true)
+      
+    if [ -n "$API_ID" ] && [ "$API_ID" != "None" ]; then
+        API_URL="https://${API_ID}.execute-api.${REGION}.amazonaws.com"
+    else
+        API_URL="https://otkv0558fh.execute-api.us-east-1.amazonaws.com"
+    fi
+fi
+echo "-> API Gateway Endpoint objetivo: $API_URL"
+
+# ----------------------------------------------------
+# 2. Ingesta de Bases de Datos hacia S3
+# ----------------------------------------------------
+echo -e "\n=== 2. EJECUTANDO / VERIFICANDO INGESTA A S3 ==="
+if [ -d "$HOME/hardtechhub-data-ingestion" ]; then
+    echo "-> Reiniciando contenedores de extracción en MV Ingesta..."
+    cd "$HOME/hardtechhub-data-ingestion"
+    docker compose restart
+    echo "-> Esperando 20 segundos a que finalice la carga de extractos a S3..."
+    sleep 20
+    cd - >/dev/null
+fi
+
+# Validar que los extractos existan en el bucket detectado
+S3_FILES=$(aws s3 ls "s3://${BUCKET_NAME}/db-extracts/" --region "$REGION" 2>/dev/null | wc -l)
+if [ "$S3_FILES" -eq 0 ]; then
+    echo "❌ Error: No se encontraron extractos en s3://${BUCKET_NAME}/db-extracts/."
+    exit 1
+fi
+echo "-> Extractos validados en S3 ($S3_FILES rutas/archivos listados)."
+
+# ----------------------------------------------------
+# 3. Validaciones de Entorno Glue / Athena
+# ----------------------------------------------------
+echo -e "\n=== 3. VALIDANDO ENTORNO ANALÍTICO ==="
 if ! aws glue get-database --name "$ATHENA_DB" --region "$REGION" >/dev/null 2>&1; then
     echo "❌ Error: No existe la base Glue/Athena '$ATHENA_DB'."
     exit 1
@@ -22,10 +75,12 @@ if ! aws athena get-work-group --work-group "$ATHENA_WORKGROUP" --region "$REGIO
     echo "❌ Error: No existe el Workgroup '$ATHENA_WORKGROUP' en Athena."
     exit 1
 fi
-echo "-> Base de datos y Workgroup validados correctamente."
+echo "-> Base Glue y Workgroup Athena validados correctamente."
 
-# 2. Ejecución y monitoreo del Crawler (Correcciones 2 y 3)
-echo -e "\n=== 2. EJECUTANDO CRAWLER DE AWS GLUE ==="
+# ----------------------------------------------------
+# 4. Ejecución del Crawler de AWS Glue
+# ----------------------------------------------------
+echo -e "\n=== 4. EJECUTANDO CRAWLER DE AWS GLUE ==="
 aws glue start-crawler --name "$CRAWLER_NAME" --region "$REGION" 2>/tmp/glue.err || {
     if grep -q "CrawlerRunningException" /tmp/glue.err; then
         echo "-> El Crawler ya se encontraba en ejecución."
@@ -45,7 +100,7 @@ while true; do
     sleep 15
 done
 
-# Validar si el crawl fue exitoso (Corrección 2)
+# Validar que el Crawler haya terminado con éxito
 LAST_STATUS=$(aws glue get-crawler --name "$CRAWLER_NAME" --region "$REGION" --query "Crawler.LastCrawl.Status" --output text)
 if [ "$LAST_STATUS" != "SUCCEEDED" ]; then
     echo "❌ Error: El Glue Crawler finalizó con estado '$LAST_STATUS'."
@@ -53,12 +108,14 @@ if [ "$LAST_STATUS" != "SUCCEEDED" ]; then
 fi
 echo "-> AWS Glue: Tablas catalogadas exitosamente."
 
-# Pausa para propagación de catálogo (Corrección 7)
-echo "Esperando 10s para la sincronización completa del catálogo en Athena..."
+# Pausa para propagación de catálogo a Athena
+echo "Esperando 10s para sincronización completa del catálogo en Athena..."
 sleep 10
 
-# 3. Creación y espera de vistas en Amazon Athena (Corrección 1)
-echo -e "\n=== 3. CREANDO VISTAS ANALÍTICAS EN ATHENA ==="
+# ----------------------------------------------------
+# 5. Creación de Vistas en Amazon Athena
+# ----------------------------------------------------
+echo -e "\n=== 5. CREANDO VISTAS ANALÍTICAS EN ATHENA ==="
 Q1="CREATE OR REPLACE VIEW vw_product_catalog AS 
     SELECT p.id AS product_id, p.name AS product_name, p.sku, p.price, p.stock, c.name AS category_name, b.name AS brand_name, p.created_at 
     FROM hardtech_analytics.products p 
@@ -80,9 +137,8 @@ for QUERY in "$Q1" "$Q2"; do
         --region "$REGION" \
         --query "QueryExecutionId" --output text)
 
-    echo "-> Ejecutando vista ($Q_ID)..."
+    echo "-> Procesando vista ($Q_ID)..."
     
-    # Polling hasta que termine (Corrección 1)
     while true; do
         ATHENA_STATUS=$(aws athena get-query-execution \
             --query-execution-id "$Q_ID" \
@@ -103,8 +159,10 @@ for QUERY in "$Q1" "$Q2"; do
 done
 echo "-> Amazon Athena: Vistas compiladas y verificadas."
 
-# 4. Sincronización del Snapshot en Analytics Service (Corrección 5)
-echo -e "\n=== 4. EJECUTANDO REFRESH DEL SNAPSHOT ANALÍTICO ==="
+# ----------------------------------------------------
+# 6. Sincronización del Snapshot en Analytics Service
+# ----------------------------------------------------
+echo -e "\n=== 6. SINCRONIZANDO SNAPSHOT ANALÍTICO ==="
 HTTP_CODE=$(curl -s -o /tmp/analytics_refresh.json -w "%{http_code}" -X POST "${API_URL}/api/analytics/refresh")
 
 if [ "$HTTP_CODE" != "200" ]; then
