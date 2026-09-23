@@ -164,3 +164,29 @@ def top_views():
         SELECT product_id, COUNT(*) AS views FROM business_snapshot WHERE event_type='PRODUCT_VIEW'
         GROUP BY product_id ORDER BY views DESC, product_id LIMIT 5
     """)}
+@app.get("/api/analytics/product-catalog")
+def product_catalog() -> dict[str, Any]:
+    rows = query("""
+        SELECT *
+        FROM vw_product_catalog
+        ORDER BY product_id
+    """)
+
+    return {
+        "products": rows,
+        "total": len(rows)
+    }
+
+
+@app.get("/api/analytics/category-brand-summary")
+def category_brand_summary() -> dict[str, Any]:
+    rows = query("""
+        SELECT *
+        FROM vw_category_brand_summary
+        ORDER BY category, brand
+    """)
+
+    return {
+        "summary": rows,
+        "total": len(rows)
+    }
