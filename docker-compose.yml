@@ -1,80 +1,119 @@
+name: "hardtech-services"
 services:
-  identity-service:
-    build:
-      context: ./identity-service
-    environment:
-      MONGO_URI: ${MONGO_URI}
-      MONGO_DB: ${MONGO_DB}
-      MONGO_USERS_COLLECTION: ${MONGO_USERS_COLLECTION}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_EXP_MINUTES: ${JWT_EXP_MINUTES}
-    ports:
-      - "${IDENTITY_SERVICE_PORT}:8001"
-    depends_on:
-      mongodb:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=5)"]
-      interval: 10s
-      timeout: 6s
-      retries: 5
-
   catalog-service:
-    build: ./catalog-service
+    build: "./catalog-service"
     environment:
-      POSTGRES_PORT: ${POSTGRES_PORT}
-      POSTGRES_HOST: ${POSTGRES_HOST}
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL}
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
+      CATALOG_MONGO_URI: "${CATALOG_MONGO_URI:-mongodb://catalog_app:local-catalog@mongodb:27017/hardtech_catalog}"
+      CATALOG_MONGO_DB: "hardtech_catalog"
     ports:
-      - "${CATALOG_SERVICE_PORT}:8002"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      identity-service:
-        condition: service_healthy
+      - "${CATALOG_SERVICE_PORT:-8002}:8002"
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:8002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
+  inventory-service:
+    build: "./inventory-service"
+    environment:
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
+      INVENTORY_POSTGRES_HOST: "${INVENTORY_POSTGRES_HOST:-postgres}"
+      INVENTORY_POSTGRES_PORT: "5432"
+      INVENTORY_POSTGRES_DB: "hardtech_inventory"
+      INVENTORY_POSTGRES_USER: "inventory_app"
+      INVENTORY_POSTGRES_PASSWORD: "${INVENTORY_POSTGRES_PASSWORD:-local-inventory}"
+    ports:
+      - "${INVENTORY_SERVICE_PORT:-8006}:8006"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8006/health', timeout=5)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
   order-service:
-    build: ./order-service
+    build: "./order-service"
     environment:
-      MYSQL_PORT: ${MYSQL_PORT}
-      MYSQL_HOST: ${MYSQL_HOST}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      CATALOG_SERVICE_URL: ${CATALOG_SERVICE_URL}
-      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL}
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
+      MYSQL_HOST: "${MYSQL_HOST:-mysql}"
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: "hardtech_orders"
+      MYSQL_USER: "orders_app"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-local-orders}"
+      CATALOG_SERVICE_URL: "${CATALOG_SERVICE_URL:-http://catalog-service:8002}"
+      INVENTORY_SERVICE_URL: "${INVENTORY_SERVICE_URL:-http://inventory-service:8006}"
     ports:
-      - "${ORDER_SERVICE_PORT}:8003"
+      - "${ORDER_SERVICE_PORT:-8003}:8003"
     depends_on:
-      mysql:
-        condition: service_healthy
-      identity-service:
-        condition: service_healthy
+      inventory-service:
+        condition: "service_healthy"
       catalog-service:
-        condition: service_started
-
+        condition: "service_healthy"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=5)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
   compatibility-service:
-    build: ./compatibility-service
+    build: "./compatibility-service"
     environment:
-      SERVER_PORT: ${SERVER_PORT}
-      CATALOG_SERVICE_URL: ${CATALOG_SERVICE_URL}
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
+      SERVER_PORT: "8004"
+      CATALOG_SERVICE_URL: "${CATALOG_SERVICE_URL:-http://catalog-service:8002}"
+      COMPATIBILITY_POSTGRES_HOST: "${COMPATIBILITY_POSTGRES_HOST:-postgres}"
+      COMPATIBILITY_POSTGRES_PORT: "5432"
+      COMPATIBILITY_POSTGRES_DB: "hardtech_compatibility"
+      COMPATIBILITY_POSTGRES_USER: "compatibility_app"
+      COMPATIBILITY_POSTGRES_PASSWORD: "${COMPATIBILITY_POSTGRES_PASSWORD:-local-compatibility}"
     ports:
-      - "${COMPATIBILITY_SERVICE}:8004"
+      - "${COMPATIBILITY_SERVICE_PORT:-8004}:8004"
     depends_on:
       catalog-service:
-        condition: service_started
+        condition: "service_healthy"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8004; printf \"GET /health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; IFS= read -r status <&3; [[ \"$$status\" == *\" 200 \"* ]]'"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "20s"
   analytics-service:
-    build: ./analytics-service
+    build: "./analytics-service"
     environment:
-      S3_BUCKET: ${S3_BUCKET}
-      S3_EVENTS_PREFIX: ${S3_EVENTS_PREFIX}
-      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
-      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL}
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
+      S3_BUCKET: "${S3_BUCKET:-}"
+      S3_EVENTS_PREFIX: "${S3_EVENTS_PREFIX:-raw/events/}"
+      S3_DATA_PREFIX: "${S3_DATA_PREFIX:-analytics/}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION:-us-east-1}"
+      GLUE_DATABASE: "${GLUE_DATABASE:-hardtech_analytics}"
+      ATHENA_WORKGROUP: "${ATHENA_WORKGROUP:-hardtech-analytics}"
+      ATHENA_OUTPUT_LOCATION: "${ATHENA_OUTPUT_LOCATION:-}"
+      ATHENA_QUERY_TIMEOUT_SECONDS: "${ATHENA_QUERY_TIMEOUT_SECONDS:-30}"
+      ORDER_SERVICE_URL: "${ORDER_SERVICE_URL:-http://order-service:8003}"
+      INVENTORY_SERVICE_URL: "${INVENTORY_SERVICE_URL:-http://inventory-service:8006}"
     ports:
-      - "${ANALYTICS_SERVICE_PORT}:8005"
-    depends_on:
-      identity-service:
-        condition: service_healthy
-
+      - "${ANALYTICS_SERVICE_PORT:-8005}:8005"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=5)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"

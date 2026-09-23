@@ -1,119 +1,216 @@
 services:
-  mongodb:
-    image: mongo:8
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: hardtech
-      MONGO_INITDB_ROOT_PASSWORD: hardtech
-    tmpfs: [/data/db, /data/configdb]
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand('ping').ok ? 0 : 1)"]
-      interval: 3s
-      timeout: 5s
-      retries: 40
   postgres:
-    image: postgres:16
+    image: "postgres:16"
     environment:
-      POSTGRES_USER: hardtech
-      POSTGRES_PASSWORD: hardtech
-      POSTGRES_DB: hardtech_catalog
-    tmpfs: [/var/lib/postgresql/data]
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "local-postgres"
+      POSTGRES_DB: "postgres"
+      INVENTORY_POSTGRES_PASSWORD: "local-inventory"
+      COMPATIBILITY_POSTGRES_PASSWORD: "local-compatibility"
     volumes:
-      - ./fixtures/postgres:/docker-entrypoint-initdb.d:ro
+      - "./fixtures/postgres/init:/docker-entrypoint-initdb.d:ro"
+      - "./fixtures/postgres/schemas:/schemas:ro"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hardtech -d hardtech_catalog"]
-      interval: 3s
-      timeout: 5s
-      retries: 40
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U \"$$POSTGRES_USER\" -d postgres"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
+    tmpfs:
+      - "/var/lib/postgresql/data"
   mysql:
-    image: mysql:8.0
+    image: "mysql:8.0"
     environment:
-      MYSQL_DATABASE: hardtech_orders
-      MYSQL_USER: hardtech
-      MYSQL_PASSWORD: hardtech
-      MYSQL_ROOT_PASSWORD: root
-    tmpfs: [/var/lib/mysql]
+      MYSQL_DATABASE: "hardtech_orders"
+      MYSQL_USER: "orders_app"
+      MYSQL_PASSWORD: "local-orders"
+      MYSQL_ROOT_PASSWORD: "local-root"
     volumes:
-      - ./fixtures/mysql:/docker-entrypoint-initdb.d:ro
+      - "./fixtures/mysql/init:/docker-entrypoint-initdb.d:ro"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
-      interval: 3s
-      timeout: 5s
-      retries: 40
-  identity-service:
-    image: hardtech-review-identity
-    build: ../identity-service
-    environment: &identity-env
-      JWT_SECRET: test-only-secret-not-for-production-12345678
-      JWT_EXP_MINUTES: "60"
-      MONGO_DB: hardtech_identity
-      MONGO_USERS_COLLECTION: users
-      MONGO_URI: mongodb://hardtech:hardtech@mongodb:27017/?authSource=admin
+      test:
+        - "CMD-SHELL"
+        - "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql -h 127.0.0.1 -u \"$$MYSQL_USER\" -D \"$$MYSQL_DATABASE\" -e \"SELECT 1 FROM orders LIMIT 1\""
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
+    tmpfs:
+      - "/var/lib/mysql"
+  mongodb:
+    image: "mongo:8"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "mongo_admin"
+      MONGO_INITDB_ROOT_PASSWORD: "local-mongo-root"
+      CATALOG_MONGO_PASSWORD: "local-catalog"
+    volumes:
+      - "./fixtures/mongo/init:/docker-entrypoint-initdb.d:ro"
+    healthcheck:
+      test:
+        - "CMD"
+        - "mongosh"
+        - "--quiet"
+        - "--eval"
+        - "const c=db.getSiblingDB(\"hardtech_catalog\"); c.auth(\"catalog_app\", process.env.CATALOG_MONGO_PASSWORD); quit(c.counters.findOne({_id:\"products\"}) ? 0 : 1)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
+    tmpfs:
+      - "/data/db"
+  catalog-service:
+    build: "../catalog-service"
+    environment:
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
+      CATALOG_MONGO_URI: "mongodb://catalog_app:local-catalog@mongodb:27017/hardtech_catalog"
+      CATALOG_MONGO_DB: "hardtech_catalog"
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "fetch('http://127.0.0.1:8002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
     depends_on:
       mongodb:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
-      interval: 3s
-      timeout: 5s
-      retries: 30
-  catalog-service:
-    image: hardtech-review-catalog
-    build: ../catalog-service
+        condition: "service_healthy"
+  inventory-service:
+    build: "../inventory-service"
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: hardtech_catalog
-      POSTGRES_USER: hardtech
-      POSTGRES_PASSWORD: hardtech
-      IDENTITY_SERVICE_URL: http://identity-service:8001
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
+      INVENTORY_POSTGRES_HOST: "postgres"
+      INVENTORY_POSTGRES_PORT: "5432"
+      INVENTORY_POSTGRES_DB: "hardtech_inventory"
+      INVENTORY_POSTGRES_USER: "inventory_app"
+      INVENTORY_POSTGRES_PASSWORD: "local-inventory"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8006/health', timeout=5)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
     depends_on:
       postgres:
-        condition: service_healthy
-      identity-service:
-        condition: service_healthy
+        condition: "service_healthy"
   order-service:
-    build: ../order-service
-    environment: &order-env
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: hardtech_orders
-      MYSQL_USER: hardtech
-      MYSQL_PASSWORD: hardtech
-      CATALOG_SERVICE_URL: http://catalog-service:8002
-      IDENTITY_SERVICE_URL: http://identity-service:8001
-    depends_on:
-      mysql:
-        condition: service_healthy
-      identity-service:
-        condition: service_healthy
-  compatibility-service:
-    image: hardtech-review-compatibility
-    build: ../compatibility-service
+    build: "../order-service"
     environment:
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
+      MYSQL_HOST: "mysql"
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: "hardtech_orders"
+      MYSQL_USER: "orders_app"
+      MYSQL_PASSWORD: "local-orders"
+      CATALOG_SERVICE_URL: "http://catalog-service:8002"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8006"
+    depends_on:
+      inventory-service:
+        condition: "service_healthy"
+      catalog-service:
+        condition: "service_healthy"
+      mysql:
+        condition: "service_healthy"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=5)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
+  compatibility-service:
+    build: "../compatibility-service"
+    environment:
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
       SERVER_PORT: "8004"
-      CATALOG_SERVICE_URL: http://catalog-service:8002
+      CATALOG_SERVICE_URL: "http://catalog-service:8002"
+      COMPATIBILITY_POSTGRES_HOST: "postgres"
+      COMPATIBILITY_POSTGRES_PORT: "5432"
+      COMPATIBILITY_POSTGRES_DB: "hardtech_compatibility"
+      COMPATIBILITY_POSTGRES_USER: "compatibility_app"
+      COMPATIBILITY_POSTGRES_PASSWORD: "local-compatibility"
     depends_on:
-      - catalog-service
+      catalog-service:
+        condition: "service_healthy"
+      postgres:
+        condition: "service_healthy"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8004; printf \"GET /health HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; IFS= read -r status <&3; [[ \"$$status\" == *\" 200 \"* ]]'"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "20s"
   analytics-service:
-    build: ../analytics-service
-    environment: &analytics-env
-      S3_BUCKET: hardtech-datalake
-      S3_EVENTS_PREFIX: raw/events/
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_EC2_METADATA_DISABLED: "true"
-      IDENTITY_SERVICE_URL: http://identity-service:8001
-    depends_on:
-      identity-service:
-        condition: service_healthy
+    build: "../analytics-service"
+    environment:
+      CORS_ORIGINS: "http://localhost:5173,http://localhost:4173"
+      S3_BUCKET: ""
+      S3_EVENTS_PREFIX: "raw/events/"
+      S3_DATA_PREFIX: "analytics/"
+      AWS_DEFAULT_REGION: "us-east-1"
+      GLUE_DATABASE: "hardtech_analytics"
+      ATHENA_WORKGROUP: "hardtech-analytics"
+      ATHENA_OUTPUT_LOCATION: ""
+      ATHENA_QUERY_TIMEOUT_SECONDS: "30"
+      ORDER_SERVICE_URL: "http://order-service:8003"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8006"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8005/health', timeout=5)"
+      interval: "5s"
+      timeout: "6s"
+      retries: 30
+      start_period: "10s"
   runner:
     build:
-      context: .
+      context: "."
     environment:
-      <<: [*identity-env, *order-env, *analytics-env]
+      INVENTORY_POSTGRES_HOST: "postgres"
+      INVENTORY_POSTGRES_PORT: "5432"
+      INVENTORY_POSTGRES_DB: "hardtech_inventory"
+      INVENTORY_POSTGRES_USER: "inventory_app"
+      INVENTORY_POSTGRES_PASSWORD: "local-inventory"
+      MYSQL_HOST: "mysql"
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: "hardtech_orders"
+      MYSQL_USER: "orders_app"
+      MYSQL_PASSWORD: "local-orders"
+      CATALOG_SERVICE_URL: "http://catalog-service:8002"
+      INVENTORY_SERVICE_URL: "http://inventory-service:8006"
+      S3_BUCKET: "test-bucket"
+      S3_EVENTS_PREFIX: "raw/events/"
+      S3_DATA_PREFIX: "analytics/"
+      AWS_DEFAULT_REGION: "us-east-1"
+      GLUE_DATABASE: "hardtech_analytics"
+      ATHENA_WORKGROUP: "hardtech-analytics"
+      ATHENA_OUTPUT_LOCATION: "s3://test-bucket/query-results/"
+      ATHENA_QUERY_TIMEOUT_SECONDS: "30"
+      ORDER_SERVICE_URL: "http://order-service:8003"
+      AWS_EC2_METADATA_DISABLED: "true"
+      CATALOG_MONGO_URI: "mongodb://catalog_app:local-catalog@mongodb:27017/hardtech_catalog"
+      COMPATIBILITY_POSTGRES_PASSWORD: "local-compatibility"
     volumes:
-      - ..:/workspace:ro
+      - "..:/workspace:ro"
     depends_on:
-      - order-service
-      - catalog-service
-      - compatibility-service
-      - analytics-service
+      order-service:
+        condition: "service_healthy"
+      compatibility-service:
+        condition: "service_healthy"
+      analytics-service:
+        condition: "service_healthy"

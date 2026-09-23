@@ -1,17 +1,17 @@
+from fastapi.middleware.cors import CORSMiddleware
 import json
 import os
-from collections import Counter
 from typing import Any
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import Depends, FastAPI, HTTPException
-from .auth import require_admin
+from fastapi import FastAPI, HTTPException
+from .athena import query, configuration
+from .pipeline import refresh
 
 
 def get_s3_client() -> Any:
-    # AWS credentials come from the standard SDK chain (e.g. an EC2 IAM role).
-    return boto3.client("s3", endpoint_url=os.getenv("S3_ENDPOINT_URL") or None)
+    return boto3.client("s3")
 
 
 
@@ -20,7 +20,7 @@ def get_bucket_name() -> str:
 
 
 def get_events_prefix() -> str:
-    return os.getenv("S3_EVENTS_PREFIX")
+    return os.getenv("S3_EVENTS_PREFIX", "raw/events/")
 
 
 def list_event_objects() -> list[str]:
@@ -66,6 +66,15 @@ def load_events() -> list[dict[str, Any]]:
 
 
 app = FastAPI(title="Analytics Service", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://localhost:4173"
+    ).split(",") if origin.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
 
 @app.get("/health")
@@ -73,27 +82,85 @@ def healthcheck() -> dict[str, str]:
     return {"service": "analytics-service", "status": "healthy", "version": "1.0.0"}
 
 
+
+@app.get("/health/aws")
+def aws_health():
+    settings = configuration()
+    try:
+        get_s3_client().head_bucket(Bucket=settings["S3_BUCKET"])
+        boto3.client("glue").get_table(DatabaseName=settings["GLUE_DATABASE"], Name="business_snapshot")
+        boto3.client("athena").get_work_group(WorkGroup=settings["ATHENA_WORKGROUP"])
+    except (BotoCoreError, ClientError):
+        raise HTTPException(503, "AWS analytics unavailable") from None
+    return {"status": "healthy"}
+
+
+@app.post("/api/analytics/refresh")
+def refresh_analytics():
+    configuration()
+    return refresh(get_s3_client(), get_bucket_name(), load_events())
+
+
 @app.get("/api/analytics/events/count")
-def count_events(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    events = load_events()
-    event_types = Counter(event.get("event_type", "UNKNOWN") for event in events)
-    return {
-        "total_events": len(events),
-        "by_type": dict(event_types),
-        "prefix": get_events_prefix(),
-    }
+def count_events() -> dict[str, Any]:
+    rows = query("SELECT event_type, COUNT(*) AS count FROM business_snapshot GROUP BY event_type")
+    return {"total_events": sum(row["count"] for row in rows),
+            "by_type": {row["event_type"]: row["count"] for row in rows}}
+
+
+@app.get("/api/analytics/summary")
+def summary():
+    rows = query("""
+        SELECT COUNT_IF(event_type='ORDER') AS orders,
+            COUNT_IF(event_type='ORDER' AND order_status IN ('PAID','SHIPPED')) AS sales,
+            COALESCE(SUM(CASE WHEN event_type='ORDER' AND order_status IN ('PAID','SHIPPED') THEN total_amount ELSE 0 END),0) AS revenue,
+            COALESCE(SUM(CASE WHEN event_type='ORDER_ITEM' AND order_status IN ('PAID','SHIPPED') THEN quantity ELSE 0 END),0) AS units_sold,
+            COUNT(DISTINCT CASE WHEN event_type='ORDER_ITEM' AND order_status IN ('PAID','SHIPPED') THEN product_id END) AS products_sold
+        FROM business_snapshot
+    """)
+    return rows[0] if rows else {"orders": 0, "sales": 0, "revenue": "0"}
 
 
 @app.get("/api/analytics/top-products")
-def top_products(user: dict[str, Any] = Depends(require_admin)) -> dict[str, Any]:
-    events = load_events()
-    product_views = Counter(
-        str(event["product_id"])
-        for event in events
-        if event.get("event_type") == "PRODUCT_VIEW" and event.get("product_id") is not None
-    )
-    top = [
-        {"product_id": product_id, "views": views}
-        for product_id, views in product_views.most_common(5)
-    ]
-    return {"top_products": top}
+def top_products() -> dict[str, Any]:
+    return {"top_products": query("""
+        SELECT product_id, MAX(product_name) AS product_name, SUM(quantity) AS units,
+            SUM(subtotal) AS revenue FROM business_snapshot
+        WHERE event_type='ORDER_ITEM' AND order_status IN ('PAID','SHIPPED')
+        GROUP BY product_id ORDER BY units DESC, product_id LIMIT 5
+    """)}
+
+
+@app.get("/api/analytics/top-categories")
+def top_categories():
+    return {"categories": query("""
+        SELECT category, SUM(quantity) AS units, SUM(subtotal) AS revenue FROM business_snapshot
+        WHERE event_type='ORDER_ITEM' AND order_status IN ('PAID','SHIPPED')
+        GROUP BY category ORDER BY units DESC, category
+    """)}
+
+
+@app.get("/api/analytics/trends")
+def trends():
+    return {"trends": query("""
+        SELECT substr(created_at,1,10) AS day, COUNT(*) AS sales, SUM(total_amount) AS revenue
+        FROM business_snapshot WHERE event_type='ORDER' AND order_status IN ('PAID','SHIPPED')
+        GROUP BY substr(created_at,1,10) ORDER BY day
+    """)}
+
+
+@app.get("/api/analytics/inventory-movements")
+def inventory_movements():
+    return {"movements": query("""
+        SELECT movement_type, COUNT(*) AS movements, SUM(quantity) AS units
+        FROM business_snapshot WHERE event_type='INVENTORY_MOVEMENT'
+        GROUP BY movement_type ORDER BY movement_type
+    """)}
+
+
+@app.get("/api/analytics/top-views")
+def top_views():
+    return {"top_products": query("""
+        SELECT product_id, COUNT(*) AS views FROM business_snapshot WHERE event_type='PRODUCT_VIEW'
+        GROUP BY product_id ORDER BY views DESC, product_id LIMIT 5
+    """)}

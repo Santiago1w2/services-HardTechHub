@@ -38,16 +38,15 @@ jobs:
 
       - name: Build microservices
         run: |
-          docker compose build identity-service catalog-service order-service compatibility-service analytics-service
+          docker compose build inventory-service catalog-service order-service compatibility-service analytics-service
 
-      # The test Dockerfile extends the Identity image built in the previous step.
       - name: Build test runner
         run: docker compose build runner
 
       - name: Start isolated test environment
         run: >-
           docker compose up -d --no-build --wait --wait-timeout 180
-          mongodb postgres mysql identity-service catalog-service
+          mongodb postgres mysql inventory-service catalog-service
           order-service compatibility-service analytics-service
 
       - name: Run regression tests
