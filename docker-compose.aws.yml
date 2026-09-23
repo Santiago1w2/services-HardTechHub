@@ -1,0 +1,9 @@
+# Optional local AWS profile. EC2/ECS deployments use their runtime IAM role instead.
+services:
+  analytics-service:
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+    volumes:
+      - "${AWS_CONFIG_DIR:?Set AWS_CONFIG_DIR to your local AWS configuration directory}:/aws:ro"

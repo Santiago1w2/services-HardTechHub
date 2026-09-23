@@ -14,7 +14,7 @@ public class CompatibilityController {
 
     private final CompatibilityService compatibilityService;
 
-    public CompatibilityController( CompatibilityService compatibilityService) {
+    public CompatibilityController(CompatibilityService compatibilityService) {
         this.compatibilityService = compatibilityService;
     }
 
