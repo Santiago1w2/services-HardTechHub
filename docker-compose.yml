@@ -44,7 +44,7 @@ services:
     environment:
       CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://localhost:4173}"
       MYSQL_HOST: "${MYSQL_HOST:-${DATABASE_HOST:?Configurar DATABASE_HOST}}"
-      MYSQL_PORT: "${MYSQL_PORT:-3306}"
+      MYSQL_PORT: "${MYSQL_PORT:-3307}"
       MYSQL_DATABASE: "hardtech_orders"
       MYSQL_USER: "orders_app"
       MYSQL_PASSWORD: "${MYSQL_PASSWORD:?Configurar MYSQL_PASSWORD}"

@@ -51,7 +51,7 @@ Antes de arrancar, copiar .env.example a .env sin sobrescribir uno existente y c
 - DATABASE_HOST: IP privada o DNS de Database, sin http://.
 - CATALOG_POSTGRES_PASSWORD, MYSQL_PASSWORD, INVENTORY_MONGO_URI: deben coincidir
   con las cuentas técnicas creadas en infraestructura (`catalog_app`, `orders_app`,
-  `inventory_app`). Puerto por defecto: PostgreSQL 5432, MySQL 3306, MongoDB 27017.
+  `inventory_app`). Puerto por defecto: PostgreSQL 5432, MySQL 3307 (puerto interno 3306), MongoDB 27017.
 - CORS_ORIGINS: origen real del frontend.
 
 DATABASE_HOST es el valor común; POSTGRES_HOST y MYSQL_HOST permiten excepciones.
